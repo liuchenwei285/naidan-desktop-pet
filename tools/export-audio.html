@@ -1,0 +1,67 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"></head><body><pre id="o">…</pre>
+<script src="../src/renderer/js/config.js"></script>
+<script src="../src/renderer/js/audio.js"></script>
+<script>
+function encodeWav(buf){
+  var n=buf.length, sr=buf.sampleRate, ab=new ArrayBuffer(44+n*2), v=new DataView(ab);
+  function str(o,s){for(var i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i));}
+  str(0,'RIFF');v.setUint32(4,36+n*2,true);str(8,'WAVE');str(12,'fmt ');
+  v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);
+  v.setUint32(24,sr,true);v.setUint32(28,sr*2,true);v.setUint16(32,2,true);v.setUint16(34,16,true);
+  str(36,'data');v.setUint32(40,n*2,true);
+  var d=buf.getChannelData(0),o=44;
+  for(var i=0;i<n;i++){var x=Math.max(-1,Math.min(1,d[i]));v.setInt16(o,x<0?x*0x8000:x*0x7FFF,true);o+=2;}
+  return ab;
+}
+var C=Naidan.CONFIG;
+
+function makeEngine(SR,DUR){
+  var off=new OfflineAudioContext(1,Math.ceil(SR*DUR),SR);
+  var eng=new Naidan.SoundEngine({context:off});
+  eng.offline=true; eng.lastAt=-999;
+  return {off:off, eng:eng};
+}
+function copyBuf(from, off){
+  var b=off.createBuffer(from.numberOfChannels, from.length, from.sampleRate);
+  for(var c=0;c<from.numberOfChannels;c++) b.getChannelData(c).set(from.getChannelData(c));
+  return b;
+}
+function boot(dur){
+  var m=makeEngine(44100,dur);
+  // 主进程已经解码过?这里自己解一遍:用 petAPI 读字节
+  return petAPI.readAudio().then(function(res){
+    if(!res||!res.ok) throw new Error('read audio failed');
+    return m.eng.ctx.decodeAudioData(new Uint8Array(res.data).buffer);
+  }).then(function(buf){
+    m.eng.buffer = m.eng.normalize(m.eng.trimSilence(buf));
+    m.eng.ready = true;
+    return m;
+  });
+}
+
+var steps = [
+  ['bubble4-single.wav', 0.5, function(eng, C){ eng.play(0.02, 1, 1); }],
+  ['bubble4-4bounce.wav', 1.6, function(eng, C){
+      var d=C.derived.jelly;
+      for(var i=0;i<C.audio.pitchSeq.length;i++){
+        eng.play(0.02+(2*i+1)*Math.PI/(2*d.wd), C.audio.pitchSeq[i], C.audio.gainSeq[i]);
+      }
+  }]
+];
+var i=0;
+function next(){
+  if(i>=steps.length){ document.getElementById('o').textContent='DONE'; return; }
+  var s=steps[i++];
+  boot(s[1]).then(function(m){
+    s[2](m.eng, C);
+    return m.off.startRendering();
+  }).then(function(b){
+    window.exportAPI.save(s[0], encodeWav(b));
+    next();
+  }).catch(function(e){
+    document.getElementById('o').textContent='ERR '+e.message;
+    next();
+  });
+}
+next();
+</script></body></html>

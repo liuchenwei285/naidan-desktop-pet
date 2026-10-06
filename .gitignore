@@ -1,0 +1,33 @@
+# ---- 依赖 / 产物 ----
+node_modules/
+dist/
+out/
+build/Release/
+*.tsbuildinfo
+
+# ---- 试听与素材外链(按需求不入库) ----
+audio-preview/
+
+# ---- 参考图与其派生对比图(含第三方图片,不入库) ----
+docs/compare-*.png
+docs/color-samples.md
+
+# ---- 日志 / 环境 ----
+*.log
+npm-debug.log*
+yarn-error.log*
+.env
+.env.*
+!.env.example
+
+# ---- 编辑器 / 系统 ----
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+
+# ---- 临时 ----
+*.tmp
+*.bak

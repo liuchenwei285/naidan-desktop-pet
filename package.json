@@ -1,0 +1,99 @@
+{
+  "name": "naidan-desktop-pet",
+  "productName": "奶蛋",
+  "version": "1.0.0",
+  "description": "奶蛋(Naidan)—— 一只会眨眼、会 Q 弹、眼睛跟着鼠标走的蛋形桌面宠物(Electron + Canvas)",
+  "main": "src/main/main.js",
+  "author": "",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --enable-logging",
+    "build": "electron-builder",
+    "dist": "electron-builder --win --x64",
+    "dist:win": "electron-builder --win --x64",
+    "dist:dir": "electron-builder --dir",
+    "shortcut": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/create-shortcut.ps1",
+    "selftest": "node tools/run-selftest.js"
+  },
+  "devDependencies": {
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.naidan.desktoppet",
+    "productName": "奶蛋",
+    "copyright": "Copyright © 2026 Naidan",
+    "asar": true,
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "audio/**/*",
+      "build/icon.ico",
+      "build/icon.png",
+      "build/tray.png",
+      "package.json",
+      "README.md",
+      "LICENSE",
+      "CREDITS.md"
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "artifactName": "${productName}-Setup-${version}.${ext}",
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "奶蛋",
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false
+    },
+    "portable": {
+      "artifactName": "${productName}-Portable-${version}.${ext}"
+    },
+    "mac": {
+      "icon": "build/icon.icns",
+      "category": "public.app-category.entertainment",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ]
+    },
+    "dmg": {
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    }
+  }
+}

@@ -1,0 +1,25 @@
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  /* 注意:这里刻意不用 overflow:hidden / clip / border-radius,
+     蛋体形变的余量由画布尺寸预留(见 config.layout),不靠裁切。 */
+  overflow: visible;
+  cursor: default;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+#stage {
+  display: block;
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 160px;   /* JS 会按 scale 覆盖 */
+  height: 170px;
+  background: transparent;
+  touch-action: none;
+}

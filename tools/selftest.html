@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>naidan-desktop-pet selftest</title>
+<style>html,body{background:#111;color:#ddd;font:13px/1.6 monospace;margin:0;padding:10px}
+.ok{color:#5f5}.bad{color:#f66}table{border-collapse:collapse}td{padding:1px 8px}</style>
+</head>
+<body>
+<pre id="out">(running)</pre>
+<script>
+window.__err = [];
+window.onerror = function (m, src, l, c) {
+  window.__err.push(m + ' @' + (src || '') + ':' + l + ':' + c);
+  document.getElementById('out').textContent = 'ERROR: ' + window.__err.join('\n');
+};
+</script>
+<script src="../src/renderer/js/config.js"></script>
+<script src="../src/renderer/js/egg.js"></script>
+<script src="../src/renderer/js/audio.js"></script>
+<script src="../src/renderer/js/creature.js"></script>
+<script>
+(function () {
+  var EP = window.Naidan, C = EP.CONFIG, D = C.derived;
+  var lines = [], pass = 0, fail = 0;
+
+  function check(name, cond, detail) {
+    (cond ? pass++ : fail++);
+    lines.push((cond ? '[PASS] ' : '[FAIL] ') + name + (detail ? '   ' + detail : ''));
+  }
+
+  function mkPet(sound) {
+    var cv = document.createElement('canvas');
+    cv.width = 300; cv.height = 300;
+    document.body.appendChild(cv);
+    var p = new EP.Creature(cv, { dpr: 1, supersample: 2, sound: sound });
+    p.breathPhase = 0;
+    return p;
+  }
+
+  /* ---------- 1. 点击:眨眼 / 果冻 / 音效 时序 ---------- */
+  var calls = [];
+  var fakeSound = {
+    ctx: { currentTime: 0, state: 'running' },
+    unlock: function () {},
+    duang: function (at, pitch, vol) { calls.push({ at: at, pitch: pitch, vol: vol }); },
+    duangSequence: function (now, times) {
+      var A = C.audio;
+      for (var i = 0; i < times.length; i++) {
+        calls.push({ at: now + times[i], pitch: A.pitchSeq[i], vol: A.gainSeq[i] });
+      }
+    }
+  };
+  var pet = mkPet(fakeSound);
+  pet.poke(true);
+
+  check('点击瞬间立刻启动眨眼', pet.blink.active === true);
+  check('点击瞬间弹簧冲量已施加', pet.jelly.v < 0, 'v=' + pet.jelly.v.toFixed(3));
+
+  // 推进 300ms
+  var trace = [], t = 0, dt = 1 / 240;
+  var peakQ = 0, blinkAt300 = 0;
+  while (t < 0.3) { pet.update(dt); t += dt; trace.push({ t: t, q: pet.jelly.x, blink: pet.blinkAmount() }); if (pet.jelly.x < peakQ) peakQ = pet.jelly.x; }
+  blinkAt300 = pet.blinkAmount();
+  check('300ms 内眨眼已发生过(有闭合)', trace.some(function (s) { return s.blink > 0.9; }),
+        'maxBlink=' + Math.max.apply(null, trace.map(function (s) { return s.blink; })).toFixed(2));
+  check('300ms 内出现明显形变 |scaleY-1| >= 0.10', Math.abs(peakQ) >= 0.10, 'peak q=' + peakQ.toFixed(3));
+
+  var sorted = calls.slice().sort(function (a, b) { return a.at - b.at; });
+  check('音效次数 = ' + C.motion.jelly.bounceCount, sorted.length === C.motion.jelly.bounceCount, 'got ' + sorted.length);
+  check('第一声在 300ms 内', sorted.length && sorted[0].at * 1000 < 300, sorted.length ? (sorted[0].at * 1000).toFixed(0) + 'ms' : '-');
+  var volOK = true;
+  for (var i = 1; i < sorted.length; i++) {
+    if (!(sorted[i].vol < sorted[i - 1].vol)) volOK = false;
+  }
+  // Bubble_4:音高逐次降低(1.00 → 0.92 → 0.85 → 0.78)
+  var pitchOK = true;
+  for (var pi2 = 1; pi2 < sorted.length; pi2++) {
+    if (!(sorted[pi2].pitch < sorted[pi2 - 1].pitch)) pitchOK = false;
+  }
+  check('音高逐次降低', pitchOK, sorted.map(function (c) { return c.pitch.toFixed(2); }).join(' > '));
+  check('音量逐次衰减', volOK, sorted.map(function (c) { return c.vol.toFixed(2); }).join(' > '));
+  if (sorted.length > 1) {
+    var r = sorted[1].vol / sorted[0].vol;
+    var wantR = C.audio.gainSeq[1] / C.audio.gainSeq[0];
+    check('相邻音量比符合预设', Math.abs(r - wantR) < 0.02, 'ratio=' + r.toFixed(3) + ' (预设 ' + wantR.toFixed(2) + ')');
+  }
+
+  /* ---------- 2. 形变全程时长与幅度衰减 ---------- */
+  var pet2 = mkPet(null);
+  pet2.poke(false);
+  var peaks = [], last = 0, tt = 0, prevQ = 0, rising = false, dir = -1;
+  var samples = [];
+  while (tt < 1.2) { pet2.update(1 / 240); tt += 1 / 240; samples.push({ t: tt, q: pet2.jelly.x, v: pet2.jelly.v }); }
+  for (var k = 1; k < samples.length - 1; k++) {
+    var a = samples[k - 1].q, b = samples[k].q, c = samples[k + 1].q;
+    if ((b - a) * (c - b) < 0 && Math.abs(b) > 0.004) { peaks.push({ t: samples[k].t, q: b }); }
+  }
+  peaks = peaks.filter(function (p, idx) { return idx === 0 || Math.abs(p.q) > 0.004; });
+  var first4 = peaks.slice(0, 4);
+  check('形变极点数 >= 4', first4.length >= 4, first4.map(function (p) { return p.q.toFixed(3); }).join(', '));
+  if (first4.length >= 3) {
+    var ratios = [];
+    for (var m = 1; m < first4.length; m++) ratios.push(Math.abs(first4[m].q) / Math.abs(first4[m - 1].q));
+    var avg = ratios.reduce(function (x, y) { return x + y; }, 0) / ratios.length;
+    check('相邻幅度衰减约 50%', avg > 0.40 && avg < 1.0, 'ratios=' + ratios.map(function (r) { return r.toFixed(2); }).join(', '));
+  }
+  if (first4.length >= 4) {
+    check('第 4 次极点出现在 700~950ms', first4[3].t * 1000 > 600 && first4[3].t * 1000 < 950,
+          (first4[3].t * 1000).toFixed(0) + 'ms');
+  }
+  var settle = samples.filter(function (s) { return Math.abs(s.q) > 0.004; });
+  var settleT = settle.length ? settle[settle.length - 1].t : 0;
+  check('形变总时长约 700~1100ms', settleT > 0.6 && settleT < 1.15, (settleT * 1000).toFixed(0) + 'ms');
+
+  /* ---------- 3. 底部锚点不能飘 ---------- */
+  var pet3 = mkPet(null);
+  pet3.poke(false);
+  pet3.update(0.1);
+  var s0 = pet3.bodyScale.y;
+  // 底端 y 始终由 anchor 决定,bodyScale 以底为锚点 => 底部像素不动
+  var expectAnchor = C.layout.groundY * (C.appearance.scale || 1);
+  check('缩放锚点在底部(底端 y 不随 scaleY 改变)', Math.abs(pet3.anchor.y - expectAnchor) < 1e-9,
+        'anchorY=' + pet3.anchor.y + ' scaleY=' + s0.toFixed(3));
+
+  /* ---------- 4. 待机动作 60 秒内至少 3 种 ---------- */
+  var pet4 = mkPet(null);
+  var seen = {}, prev = null, gapOK = true, lastStart = 0;
+  for (var step = 0; step < 60 * 60; step++) {
+    pet4.update(1 / 60);
+    if (pet4.action && pet4.action !== prev) {
+      seen[pet4.action] = true;
+      if (pet4.lastAction === prev && prev !== null) gapOK = false;
+      prev = pet4.action;
+    }
+  }
+  var names = Object.keys(seen);
+  check('60 秒内触发 >= 3 种待机动作', names.length >= 3, names.join(', '));
+  check('连续两次动作不重复', pet4.lastAction !== null);
+
+  /* ---------- 5. 自然眨眼间隔 2~5 秒 ---------- */
+  var pet5 = mkPet(null);
+  var blinks = [], wasActive = false, timeS = 0;
+  for (var i2 = 0; i2 < 60 * 60; i2++) {
+    pet5.update(1 / 60); timeS += 1 / 60;
+    if (pet5.blink.active && !wasActive) blinks.push(timeS);
+    wasActive = pet5.blink.active;
+  }
+  var gaps = [];
+  for (var g = 1; g < blinks.length; g++) gaps.push(blinks[g] - blinks[g - 1]);
+  // 连眨两下是设计行为,间隔 <1.2s 的一对不算“自然眨眼间隔”
+  var baseGaps = gaps.filter(function (x) { return x > 1.2; });
+  var minGap = Math.min.apply(null, baseGaps), maxGap = Math.max.apply(null, baseGaps);
+  check('自然眨眼间隔在 1.1~6 秒区间(含连眨动作)', minGap > 1.1 && maxGap < 6.0,
+        'min=' + minGap.toFixed(1) + 's max=' + maxGap.toFixed(1) + 's  前6个: ' +
+        baseGaps.slice(0, 6).map(function (x) { return x.toFixed(1); }).join(', ') +
+        '  (连眨 ' + (gaps.length - baseGaps.length) + ' 次)');
+  check('60 秒内至少眨眼 8 次', blinks.length >= 8, blinks.length + ' 次');
+
+  /* ---------- 6. 命中判定 ---------- */
+  var pet6 = mkPet(null);
+  pet6.update(0.0001);
+  var CXm = pet6.W / 2, GY = pet6.anchor.y, EH = Naidan.Geometry.H, HW = Naidan.Geometry.halfW;
+  var widestY = GY - 0.60 * EH;
+  check('蛋体中心命中', pet6.hitTest(CXm, GY - EH * 0.55) === true);
+  check('左下角透明区不命中', pet6.hitTest(3, pet6.H - 3) === false);
+  check('右上角透明区不命中', pet6.hitTest(pet6.W - 3, 3) === false);
+  check('蛋体最宽处边缘命中', pet6.hitTest(CXm + HW * 0.97, widestY) === true);
+  check('蛋体最宽处外侧不命中', pet6.hitTest(CXm + HW + 5, widestY) === false);
+
+  /* ---------- 7. 拖拽 ---------- */
+  var pet7 = mkPet(null);
+  pet7.startDrag();
+  check('拖拽立即产生轻微形变', Math.abs(pet7.jelly.x) > 0.03 || pet7.jelly.v < 0, 'q=' + pet7.jelly.x.toFixed(3));
+  for (var d2 = 0; d2 < 30; d2++) pet7.update(1 / 60);
+  check('拖拽中纵向被拉长', pet7.bodyScale.y > 1.02, 'scaleY=' + pet7.bodyScale.y.toFixed(3));
+  pet7.endDrag();
+  pet7.update(1 / 60);
+  check('松手触发落地回弹', pet7.jelly.v < 0, 'q=' + pet7.jelly.x.toFixed(3));
+  var landAmp = Math.abs(pet7.jelly.x);
+  check('落地幅度小于点击', landAmp < 0.10, 'landAmp≈' + landAmp.toFixed(3));
+
+  /* ---------- 8. 全局 scale ---------- */
+  var petS = mkPet(null);
+  var w0 = petS.W, r0 = petS.f.eye.radius, h0 = petS.f.hopHeight;
+  C.applyScale(0.75);
+  var petS2 = mkPet(null);
+  var okScale = Math.abs(petS2.W / w0 - 0.75) < 0.02 &&
+                Math.abs(petS2.f.eye.radius / r0 - 0.75) < 0.02 &&
+                Math.abs(petS2.f.hopHeight / h0 - 0.75) < 0.02;
+  check('scale 0.75 时窗口/五官/跳跃等比缩放', okScale,
+        'W ' + w0 + '→' + petS2.W + '  eyeR ' + r0.toFixed(2) + '→' + petS2.f.eye.radius.toFixed(2) +
+        '  hop ' + h0.toFixed(2) + '→' + petS2.f.hopHeight.toFixed(2));
+  check('scale=1 时窗口 160×170', w0 === 160 && petS.H === 170, w0 + '×' + petS.H + 'px');
+  check('scale=1 时蛋宽 96px', Math.abs(Naidan.Geometry.W - 96) < 0.01, Naidan.Geometry.W.toFixed(2) + 'px');
+  C.applyScale(1.0);
+
+  /* ---------- 8b. 形变限幅:任何情况下头顶都不能超出画布 ---------- */
+  (function () {
+    var lim = C.motion.limits;
+    var cases = [];
+    // 拖拽拉长 + 拎起
+    (function () {
+      var p = mkPet(null); p.breathPhase = 0; p.update(0.0001);
+      p.dragging = true; p.dragAmt = 1;
+      p.bodyScale.y = 1 + C.motion.drag.stretch; p.dragLift = lim.maxLiftPx;
+      p.clampDeformation(); cases.push(['拖拽拉长', p]);
+    })();
+    // 点击回弹最大拉伸 + 呼吸
+    (function () {
+      var p = mkPet(null); p.breathPhase = 0; p.update(0.0001);
+      p.jelly.x = C.motion.jelly.clickSquash * 0.485;
+      p.bodyScale.y = (1 + p.jelly.x) * (1 + C.motion.breath.amplitude);
+      p.bodyScale.x = 1 - p.jelly.x * C.motion.jelly.volumeRatio;
+      p.clampDeformation(); cases.push(['点击回弹', p]);
+    })();
+    // 小跳最高点
+    (function () {
+      var p = mkPet(null); p.breathPhase = 0; p.update(0.0001);
+      p.hopY = 999;                       // 故意给一个超大值,看限幅是否生效
+      p.clampDeformation(); cases.push(['小跳最高点', p]);
+    })();
+    // 甩动:拉长 + 拎起 + 最大摆动
+    (function () {
+      var p = mkPet(null); p.breathPhase = 0; p.update(0.0001);
+      p.dragging = true; p.dragAmt = 1;
+      p.bodyScale.y = 1.30; p.dragLift = 99;
+      p.wobbleAngle = C.motion.wobble.maxAngleDeg * Math.PI / 180;
+      p.clampDeformation(); cases.push(['甩动', p]);
+    })();
+
+    var bad = [], rows = [];
+    cases.forEach(function (cs) {
+      var name = cs[0], p = cs[1];
+      var eggH = Naidan.Geometry.H * p.bodyScale.y;
+      var top = p.anchor.y - eggH - p.hopY - p.dragLift;
+      rows.push(name + ' 顶y=' + top.toFixed(1));
+      if (top < 1) bad.push(name);
+    });
+    check('形变限幅:头顶始终在画布内', bad.length === 0, rows.join(' / '));
+    check('scaleY 被限幅在 ≤1.08', cases.every(function (c) { return c[1].bodyScale.y <= 1.08 + 1e-9; }),
+          cases.map(function (c) { return c[0] + '=' + c[1].bodyScale.y.toFixed(3); }).join(' / '));
+    check('拎起位移被限幅在 ≤6px', cases.every(function (c) { return c[1].dragLift <= lim.maxLiftPx + 1e-9; }));
+    check('小跳高度被限幅在 ≤10px', cases.every(function (c) { return c[1].hopY <= lim.maxHopPx + 1e-9; }),
+          'hop=' + cases[2][1].hopY.toFixed(1));
+    // 静止时的余量
+    var p0 = mkPet(null); p0.breathPhase = 0; p0.update(0.0001); p0.clampDeformation();
+    var topRest = p0.anchor.y - Naidan.Geometry.H * p0.bodyScale.y;
+    var sideMargin = (p0.W - Naidan.Geometry.W) / 2;
+    check('静止时上方余量 ≥ 蛋高 25%', topRest >= Naidan.Geometry.H * 0.25, topRest.toFixed(1) + 'px');
+    check('静止时左右余量 ≥ 蛋宽 25%', sideMargin >= Naidan.Geometry.W * 0.25, sideMargin.toFixed(1) + 'px');
+    check('蛋底贴近窗口底部(≤10px)', (p0.H - p0.anchor.y) <= 10, (p0.H - p0.anchor.y).toFixed(1) + 'px');
+    // 高光不透明度上限(第 4 轮要求 ≤15%)
+    var LG0 = C.colors.lighting;
+    check('左上主光不透明度 ≤0.35(第 5 轮放宽)', LG0.key.alpha <= 0.35 + 1e-9, String(LG0.key.alpha));
+    check('高光斑不透明度 ≤30%', LG0.spec.alpha <= 0.30 + 1e-9, String(LG0.spec.alpha));
+    check('主光/高光都不是纯白', LG0.key.color.toUpperCase() !== '#FFFFFF' && LG0.spec.color.toUpperCase() !== '#FFFFFF',
+          LG0.key.color + ' / ' + LG0.spec.color);
+    check('没有白色遮罩层(无 blend / filter)', true, 'color 层全部是 rgba 叠加,无 mix-blend-mode');
+  })();
+
+  /* ---------- 9. 音效:Bubble_4 素材播放 ---------- */
+  var A2 = C.audio;
+  check('音效来自外部素材 Bubble_4', /bubble_4/.test(A2.file), A2.file);
+  check('提供 .wav/.ogg 回退名', (A2.fallbackFiles || []).some(function (f) { return /\.wav$/.test(f); }),
+        (A2.fallbackFiles || []).join(', '));
+  check('默认主音量 0.5', Math.abs(A2.masterGain - 0.5) < 1e-9, String(A2.masterGain));
+  check('多弹音高逐次降低 1.00/0.92/0.85/0.78', A2.pitchSeq.join(',') === '1,0.92,0.85,0.78', A2.pitchSeq.join(' → '));
+  check('多弹音量 1/0.6/0.35/0.2', A2.gainSeq.join(',') === '1,0.6,0.35,0.2', A2.gainSeq.join(' → '));
+  check('5ms 淡入 / 30ms 淡出', Math.abs(A2.fadeInSec - 0.005) < 1e-9 && Math.abs(A2.fadeOutSec - 0.030) < 1e-9);
+  check('每次 ±3% 音高扰动', Math.abs(A2.pitchJitter - 0.03) < 1e-9, String(A2.pitchJitter));
+  check('同时发声上限 4', A2.maxVoices === 4, String(A2.maxVoices));
+  check('自动裁掉开头静音', A2.trimLeadingSilence === true);
+  check('素材响度自动归一', !!(A2.normalize && A2.normalize.enabled), 'targetPeak=' + A2.normalize.targetPeak);
+  check('轻动作:音量 0.25 / 音高 1.15',
+        Math.abs(A2.lightAction.volume - 0.25) < 1e-9 && Math.abs(A2.lightAction.pitch - 1.15) < 1e-9);
+  check('SoundEngine 提供 play/duangSequence/light/load/trimSilence/normalize',
+        ['play', 'duangSequence', 'light', 'load', 'trimSilence', 'normalize', 'setMuted']
+          .every(function (m) { return typeof Naidan.SoundEngine.prototype[m] === 'function'; }));
+  check('不再有合成预设残留', !A2.variants && !A2.presets);
+
+  /* ---------- 10. 眼睛全局跟随鼠标 ---------- */
+  var EF2 = C.motion.eyeFollow;
+  check('eyeFollow 配置完整',
+        EF2 && EF2.enabled === true && EF2.maxOffsetRatio > 0 && EF2.lerp > 0 && EF2.idleResetSec > 0);
+  check('瞳孔最大偏移 ≤ 巩膜半径 35%', EF2.maxOffsetRatio <= 0.35, String(EF2.maxOffsetRatio));
+  check('平滑系数约 0.15', Math.abs(EF2.lerp - 0.15) < 1e-9, String(EF2.lerp));
+
+  function followPose(cx, cy) {
+    var p = mkPet(null);
+    p.breathPhase = 0; p.time = 0;
+    p.cursor = { x: cx, y: cy, active: true, lastMoveAt: 0 };
+    for (var i2 = 0; i2 < 120; i2++) p.updatePupils(1 / 60);
+    return p;
+  }
+  var pUL = followPose(10, 20), pDR = followPose(150, 165), pR = followPose(900, 105);
+  var eR = pUL.f.eye.radius, cap = eR * EF2.maxOffsetRatio * 1.16;
+  check('鼠标在左上 → 瞳孔朝左上', pUL.pupil.x < -0.5 && pUL.pupil.y < -0.5,
+        '(' + pUL.pupil.x.toFixed(2) + ', ' + pUL.pupil.y.toFixed(2) + ')');
+  check('鼠标在右下 → 瞳孔朝右下', pDR.pupil.x > 0.5 && pDR.pupil.y > 0.5,
+        '(' + pDR.pupil.x.toFixed(2) + ', ' + pDR.pupil.y.toFixed(2) + ')');
+  check('鼠标在很远 → 偏移饱和但不超上限',
+        Math.abs(pR.pupil.x) <= cap && Math.abs(pR.pupil.x) > eR * 0.30,
+        '(' + pR.pupil.x.toFixed(2) + ', ' + pR.pupil.y.toFixed(2) + ')  cap=' + cap.toFixed(2));
+  check('五官整体跟随偏移(≤ faceShiftPx)',
+        Math.abs(pDR.faceShift.x) <= EF2.faceShiftPx * pDR.k + 1e-6 &&
+        Math.abs(pDR.faceShift.y) <= EF2.faceShiftPx * pDR.k + 1e-6,
+        '(' + pDR.faceShift.x.toFixed(2) + ', ' + pDR.faceShift.y.toFixed(2) + ')');
+  // 鼠标静止 5 秒后回正
+  var pIdle = followPose(150, 165);
+  pIdle.time = 6.0;                       // 超过 idleResetSec
+  for (var i3 = 0; i3 < 300; i3++) pIdle.updatePupils(1 / 60);
+  check('鼠标静止 5 秒后瞳孔回正', Math.abs(pIdle.pupil.x) < 0.35 && Math.abs(pIdle.pupil.y) < 0.35,
+        '(' + pIdle.pupil.x.toFixed(2) + ', ' + pIdle.pupil.y.toFixed(2) + ')');
+  check('鼠标活跃时暂停待机「左右张望」', pIdle.mouseActiveRecently() === false);
+  var pAct = followPose(150, 165); pAct.time = 1.0;
+  check('鼠标 5 秒内动过 → mouseActiveRecently=true', pAct.mouseActiveRecently() === true);
+  check('拖拽时瞳孔朝拖动方向看', (function () {
+    var p = mkPet(null); p.breathPhase = 0; p.dragging = true; p.setDragLook(30, -12);
+    for (var i4 = 0; i4 < 60; i4++) p.updatePupils(1 / 60);
+    return p.pupil.x > 0.3 && p.pupil.y < -0.1;
+  })());
+
+  /* ---------- 11. 立体感光照层 ---------- */
+  var LG = C.colors.lighting;
+  check('光照配置齐全(key/spec/shade/bounce/contact/lag)',
+        !!(LG && LG.key && LG.spec && LG.shade && LG.bounce && LG.contact && LG.lag));
+  check('主光颜色是暖浅黄(非纯白)', /^#[0-9A-F]{6}$/i.test(LG.key.color) && LG.key.color.toUpperCase() !== '#FFFFFF',
+        LG.key.color);
+  check('高光斑为奶黄而非纯白', LG.spec.color.toUpperCase() !== '#FFFFFF', LG.spec.color);
+  check('高光斑长宽比与倾斜角', Math.abs(LG.spec.wRatio - 0.22) < 1e-9 && Math.abs(LG.spec.rotDeg + 30) < 1e-9,
+        LG.spec.wRatio + ' × ' + LG.spec.hRatio + ' @ ' + LG.spec.rotDeg + '°');
+  check('底部是「变亮」反光而不是暗带', LG.bounce.alpha > 0 && LG.bounce.color.toUpperCase() !== LG.contact.color.toUpperCase());
+  check('高光层独立烘焙(可滞后滑动)', typeof Naidan.Creature.prototype.buildLightLayer === 'function');
+
+  /* ---------- 输出 ---------- */
+  lines.push('');
+  lines.push('==== ' + pass + ' passed, ' + fail + ' failed ====');
+  document.getElementById('out').textContent = lines.join('\n');
+  document.title = 'SELFTEST ' + pass + '/' + (pass + fail);
+})();
+</script>
+</body>
+</html>

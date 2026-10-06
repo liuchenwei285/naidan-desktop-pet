@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>naidan-desktop-pet preview</title>
+<style>html,body{margin:0;padding:0;background:transparent;overflow:hidden}canvas{display:block}</style>
+</head>
+<body>
+<pre id="err" style="position:fixed;left:0;top:0;color:#f00;font:14px monospace;z-index:9"></pre>
+<script>
+window.__errors = [];
+window.onerror = function (m, s, l, c) {
+  window.__errors.push(m + ' @' + s + ':' + l + ':' + c);
+  document.getElementById('err').textContent = window.__errors.join('\n');
+};
+</script>
+<script src="../src/renderer/js/config.js"></script>
+<script src="../src/renderer/js/egg.js"></script>
+<script src="../src/renderer/js/creature.js"></script>
+<script>
+(function () {
+  var EP = window.Naidan, C = EP.CONFIG;
+  var qs = new URLSearchParams(location.search);
+  var mode = qs.get('mode') || 'rest';
+  var noShadow = qs.get('noshadow') === '1';
+
+  /** 用指定 dpr 渲染一帧,返回离屏 canvas(内部分辨率 = 300*dpr) */
+  function renderScene(state, dpr, ss, dt) {
+    var off = document.createElement('canvas');
+    off.style.cssText = 'width:300px;height:300px';
+    var pet = new EP.Creature(off, { dpr: dpr, supersample: (ss === undefined ? dpr : ss) });
+    applyState(pet, state);
+    pet.update(dt === undefined ? 0.0001 : dt);
+    solid(pet);
+    if (!noShadow) pet.draw(); else pet.draw();
+    return { canvas: off, pet: pet };
+  }
+
+  function solid(pet) { /* 供将来使用 */ }
+
+  function applyState(pet, state) {
+    var B = C.motion.blink;
+    pet.breathPhase = 0;          // 静止对比用「呼吸最小」姿态
+    switch (state) {
+      case 'rest': break;
+      case 'blink25': pet.blink.active = true; pet.blink.t = B.closeMs * 0.25; break;
+      case 'blink50': pet.blink.active = true; pet.blink.t = B.closeMs * 0.5; break;
+      case 'blink75': pet.blink.active = true; pet.blink.t = B.closeMs * 0.75; break;
+      case 'blink':   pet.blink.active = true; pet.blink.t = B.closeMs + B.holdMs * 0.5; break;
+      case 'open':    pet.blink.active = true; pet.blink.t = B.closeMs + B.holdMs + B.openMs * 0.35; break;
+      case 'squash':  pet.jelly.x = -0.150; break;
+      case 'squash2': pet.jelly.x = -0.053; break;
+      case 'stretch': pet.jelly.x = 0.073; break;
+      case 'land':    pet.jelly.x = -0.075; break;
+      case 'wobP':    pet.wobbleAngle = 4 * Math.PI / 180; break;
+      case 'wobN':    pet.wobbleAngle = -4 * Math.PI / 180; break;
+      case 'hop5':    pet.hopY = 5; break;
+      case 'hop10':   pet.hopY = 10; break;
+      case 'yawn':    pet.stretchAmt = 0.045; break;
+      case 'gazeL':   pet.gazeOffset = -0.22; break;
+      case 'gazeR':   pet.gazeOffset = 0.22; break;
+      case 'follow':  pet.pupil.x = -2.9; pet.pupil.y = 2.2; break;
+      case 'breath':  pet.breathAmp = C.motion.breath.amplitude; break;
+      case 'drag':    pet.dragAmt = 1; break;
+    }
+  }
+
+  /* 覆盖形变后的最终绘制参数(applyState 里直接设值会被 update 覆盖) */
+  function forceState(pet, state) {
+    switch (state) {
+      case 'squash': pet.jelly.x = -0.150; pet.jelly.v = 0; break;
+      case 'squash2': pet.jelly.x = -0.053; pet.jelly.v = 0; break;
+      case 'stretch': pet.jelly.x = 0.073; pet.jelly.v = 0; break;
+      case 'land': pet.jelly.x = -0.075; pet.jelly.v = 0; break;
+      case 'breath': pet.breathAmp = C.motion.breath.amplitude; break;
+      case 'drag': pet.dragAmt = 1; break;
+    }
+    // 重新计算 bodyScale
+    var m = C.motion;
+    var sy = 1 + pet.jelly.x, sx = 1 - pet.jelly.x * m.jelly.volumeRatio;
+    sy *= (1 + (pet.breathAmp || 0));
+    sx *= (1 - (pet.breathAmp || 0) * m.breath.widthCoupling);
+    sy *= (1 + pet.stretchAmt);
+    sy *= (1 + m.drag.stretch * pet.dragAmt);
+    sx *= (1 - m.drag.stretch * 0.6 * pet.dragAmt);
+    pet.bodyScale.x = sx; pet.bodyScale.y = sy;
+  }
+
+  function makeOut(w, h) {
+    var cv = document.createElement('canvas');
+    cv.width = Math.round(w); cv.height = Math.round(h);
+    cv.style.width = w + 'px'; cv.style.height = h + 'px';
+    document.body.appendChild(cv);
+    return cv;
+  }
+
+  function blit(g, scene, dx, dy, dw, dh) {
+    var src = scene.canvas;
+    g.drawImage(src, 0, 0, src.width, src.height, dx, dy, dw, dh);
+  }
+
+  var SC = (C.appearance ? C.appearance.scale : 1);
+  var CW = C.window.baseCanvasWidth * SC;    // 画布宽(含 scale)
+  var CH = C.window.baseCanvasHeight * SC;   // 画布高(含 scale)
+  if (mode === 'rest' || mode === 'icon' || mode === 'state') {
+    var state0 = qs.get('state') || 'rest';
+    var preScale = qs.get('scale');
+    if (preScale) C.applyScale(parseFloat(preScale));
+    SC = (C.appearance ? C.appearance.scale : 1);
+    CW = C.window.baseCanvasWidth * SC; CH = C.window.baseCanvasHeight * SC;
+    var outW = mode === 'icon' ? parseFloat(qs.get('size') || '1024') : CW;
+    var outH = mode === 'icon' ? outW : CH;
+    var state = state0;
+    var scene = renderScene(state, mode === 'icon' ? outW / CW : 1);
+    forceState(scene.pet, state);
+    scene.pet.draw();
+    var cv = makeOut(outW, outH);
+    var gI = cv.getContext('2d');
+    var size = outW;
+    if (mode === 'icon') {
+      // 图标:让蛋体(含接触阴影)占画布约 92%,并居中
+      var CB = { x0: 0.167 * CW, y0: 0.06 * CH, x1: 0.833 * CW, y1: 0.995 * CH };
+      var cw = CB.x1 - CB.x0, ch = CB.y1 - CB.y0;
+      var k = size * 0.92 / Math.max(cw, ch);
+      var dx = size / 2 - ((CB.x0 + CB.x1) / 2) * k;
+      var dy = size / 2 - ((CB.y0 + CB.y1) / 2) * k;
+      var kx = k, ky = k;
+      gI.drawImage(scene.canvas, 0, 0, scene.canvas.width, scene.canvas.height, dx, dy, CW * kx, CH * ky);
+    } else {
+      blit(gI, scene, 0, 0, outW, outH);
+    }
+
+  } else if (mode === 'sheet') {
+    var ROWS = [
+      { s: ['rest', 'squash', 'stretch', 'squash2', 'stretch', 'rest'],
+        l: ['点击 0ms', '点击 100ms 压缩', '点击 300ms 回弹', '点击 500ms 压缩', '点击 700ms 回弹', '点击 900ms 复位'] },
+      { s: ['rest', 'breath', 'blink25', 'blink50', 'blink75', 'blink'],
+        l: ['静止(呼吸最小)', '呼吸最大 +2%', '眨眼 25%', '眨眼 50%', '眨眼 75%', '完全闭合'] },
+      { s: ['open', 'gazeL', 'gazeR', 'follow', 'hop5', 'hop10'],
+        l: ['睁开中', '张望左', '张望右', '瞳孔跟随', '起跳 5px', '起跳 10px'] },
+      { s: ['wobP', 'wobN', 'yawn', 'drag', 'land', 'stretch'],
+        l: ['摇摆 +4°', '摇摆 -4°', '打哈欠拉伸', '被拎起', '落地挤压', '轻微拉长'] }
+    ];
+    var cellW = 190, cellH = 236, pad = 6;
+    var cols = 6, rows = ROWS.length;
+    var outW = cols * cellW, outH = rows * cellH + 12;
+    var out = makeOut(outW, outH);
+    var g = out.getContext('2d');
+    g.fillStyle = '#15171c';
+    g.fillRect(0, 0, outW, outH);
+
+    for (var r = 0; r < rows; r++) {
+      for (var c = 0; c < cols; c++) {
+        var st = ROWS[r].s[c];
+        var sc = renderScene(st, Math.max(1, (cellW - 2 * pad) / CW));
+        forceState(sc.pet, st);
+        sc.pet.draw();
+        var dx = c * cellW + pad, dy = r * cellH + 8;
+        g.save();
+        g.fillStyle = '#20232a';
+        g.fillRect(dx - 4, dy - 2, cellW - 2 * pad + 8, (cellW - 2 * pad) * (CH / CW) + 24);
+        g.restore();
+        blit(g, sc, dx, dy, cellW - 2 * pad, (cellW - 2 * pad) * (CH / CW));
+        g.fillStyle = '#cfd3da';
+        g.font = '12px "Microsoft YaHei",sans-serif';
+        g.fillText(ROWS[r].l[c], dx + 2, dy + (cellW - 2 * pad) * (CH / CW) + 17);
+      }
+    }
+  }
+
+  if (qs.get('bbox') === '1') {
+    var el = document.getElementById('err');
+    var out = [];
+    for (var bi = 0; bi < document.body.children.length; bi++) {
+      var ch = document.body.children[bi];
+      if (ch.tagName !== 'CANVAS') continue;
+      var gg = ch.getContext('2d');
+      var dd = gg.getImageData(0, 0, ch.width, ch.height).data;
+      var x0 = 1e9, y0 = 1e9, x1 = -1, y1 = -1;
+      for (var yy = 0; yy < ch.height; yy++) for (var xx = 0; xx < ch.width; xx++) {
+        if (dd[(yy * ch.width + xx) * 4 + 3] > 10) { if (xx < x0) x0 = xx; if (xx > x1) x1 = xx; if (yy < y0) y0 = yy; if (yy > y1) y1 = yy; }
+      }
+      out.push('canvas#' + bi + ' ' + ch.width + 'x' + ch.height + ' css=' + ch.style.width + ' alpha>10 x[' + x0 + ',' + x1 + '] y[' + y0 + ',' + y1 + ']');
+    }
+    out.push('CW=' + (typeof CW !== 'undefined' ? CW : '?') + ' mode=' + mode + ' dpr=' + window.devicePixelRatio);
+    el.textContent = out.join(' | ');
+  }
+
+  /* ---------------- 形变极限五连(验证头顶不被裁切) ---------------- */
+  if (mode === 'deform') {
+    var CASES = [
+      { k: 'rest',     label: '1 静止' },
+      { k: 'dragmax',  label: '2 拖拽拉长' },
+      { k: 'whip',     label: '3 甩动' },
+      { k: 'clickmax', label: '4 点击回弹' },
+      { k: 'hopmax',   label: '5 小跳最高点' }
+    ];
+    var pad2 = 10, cw2 = CW + pad2 * 2, chch = CH + pad2 * 2;
+    var out3 = makeOut(cw2 * CASES.length, chch + 26);
+    var g3 = out3.getContext('2d');
+    g3.fillStyle = '#15171c'; g3.fillRect(0, 0, out3.width, out3.height);
+    var info = [];
+    for (var ci = 0; ci < CASES.length; ci++) {
+      var cs = CASES[ci];
+      var off2 = document.createElement('canvas');
+      off2.style.cssText = 'width:' + CW + 'px;height:' + CH + 'px';
+      var pet2 = new EP.Creature(off2, { dpr: 1 });
+      pet2.breathPhase = 0;
+      var lim = C.motion.limits;
+      if (cs.k === 'dragmax') {
+        pet2.dragging = true; pet2.dragAmt = 1;
+        pet2.bodyScale.y = 1 + C.motion.drag.stretch; pet2.bodyScale.x = 1 - C.motion.drag.stretch * 0.6;
+        pet2.dragLift = lim.maxLiftPx; pet2.clampDeformation();
+      } else if (cs.k === 'whip') {
+        pet2.dragging = true; pet2.dragAmt = 1;
+        pet2.bodyScale.y = 1 + C.motion.drag.stretch; pet2.dragLift = lim.maxLiftPx;
+        pet2.wobbleAngle = C.motion.wobble.maxAngleDeg * Math.PI / 180;
+        pet2.clampDeformation();
+      } else if (cs.k === 'clickmax') {
+        pet2.jelly.x = C.motion.jelly.clickSquash * 0.485;   // 回弹最大拉伸
+        pet2.jelly.v = 0;
+        var mm = C.motion;
+        pet2.bodyScale.y = (1 + pet2.jelly.x) * (1 + mm.breath.amplitude);
+        pet2.bodyScale.x = (1 - pet2.jelly.x * mm.jelly.volumeRatio);
+        pet2.clampDeformation();
+      } else if (cs.k === 'hopmax') {
+        pet2.hopY = lim.maxHopPx;
+        pet2.clampDeformation();
+      } else {
+        pet2.bodyScale.y = 1; pet2.bodyScale.x = 1; pet2.clampDeformation();
+      }
+      pet2.draw();
+      var dx2 = ci * cw2;
+      g3.fillStyle = '#0d0f13'; g3.fillRect(dx2 + 2, 2, cw2 - 4, chch - 4);
+      g3.drawImage(off2, dx2 + pad2, pad2);
+      // 找最上面一行不透明像素
+      var gg2 = off2.getContext('2d');
+      var dd2 = gg2.getImageData(0, 0, CW, CH).data;
+      var topRow = -1;
+      for (var yy2 = 0; yy2 < CH && topRow < 0; yy2++) {
+        for (var xx2 = 0; xx2 < CW; xx2++) {
+          if (dd2[(yy2 * CW + xx2) * 4 + 3] > 24) { topRow = yy2; break; }
+        }
+      }
+      info.push(cs.label + ' 头顶 y=' + topRow + (topRow > 0 ? ' 完整' : ' 被裁!'));
+      g3.fillStyle = topRow > 0 ? '#8fe0a8' : '#ff6b6b';
+      g3.font = '13px "Microsoft YaHei",sans-serif';
+      g3.fillText(cs.label + '  头顶 y=' + topRow + (topRow > 0 ? '  OK' : '  CLIPPED'), dx2 + pad2, chch + 18);
+      console.log('[deform] ' + cs.label + ' topRow=' + topRow + ' scaleY=' + pet2.bodyScale.y.toFixed(3) +
+                  ' hop=' + pet2.hopY.toFixed(1) + ' lift=' + pet2.dragLift.toFixed(1));
+    }
+    if (qs.get('bbox') === '1') document.getElementById('err').textContent = info.join(' | ');
+  }
+
+  /* ---------------- 眼睛跟随鼠标:左上 / 右下 / 远处 ---------------- */
+  if (mode === 'eyes') {
+    var SC2 = (C.appearance ? C.appearance.scale : 1);
+    var CW2 = C.window.baseCanvasWidth * SC2, CH2 = C.window.baseCanvasHeight * SC2;
+    var CASES2 = [
+      { label: '鼠标:左上方',  x: 8,     y: 22 },
+      { label: '鼠标:右下方',  x: 152,   y: 166 },
+      { label: '鼠标:正右远处', x: 900,  y: 105 }
+    ];
+    var pad3 = 22, cw3 = CW2 + pad3 * 2, ch3 = CH2 + pad3 * 2;
+    var out4 = makeOut(cw3 * CASES2.length, ch3 + 30);
+    var g4 = out4.getContext('2d');
+    g4.fillStyle = '#15171c'; g4.fillRect(0, 0, out4.width, out4.height);
+    var rows2 = [];
+    for (var ei = 0; ei < CASES2.length; ei++) {
+      var cc = CASES2[ei];
+      var off3 = document.createElement('canvas');
+      off3.style.cssText = 'width:' + CW2 + 'px;height:' + CH2 + 'px';
+      var pe = new EP.Creature(off3, { dpr: 2 });
+      pe.breathPhase = 0;
+      pe.time = 0;
+      pe.cursor = { x: cc.x, y: cc.y, active: true, lastMoveAt: 0 };   // 屏幕坐标(已换算到画布)
+      for (var st = 0; st < 120; st++) pe.updatePupils(1 / 60);        // 收敛
+      pe.draw();
+      var dx3 = ei * cw3;
+      g4.fillStyle = '#0d0f13'; g4.fillRect(dx3 + 2, 2, cw3 - 4, ch3 - 4);
+      g4.drawImage(off3, dx3 + pad3, pad3, CW2, CH2);
+      // 画光标方向的示意箭头
+      var ax = dx3 + pad3 + (cc.x <= CW2 ? cc.x : CW2 - 6);
+      var ay = pad3 + (cc.y <= CH2 ? cc.y : CH2 - 6);
+      g4.strokeStyle = '#4fc3f7'; g4.lineWidth = 1.5;
+      g4.beginPath(); g4.arc(ax, ay, 5, 0, Math.PI * 2); g4.stroke();
+      g4.beginPath(); g4.moveTo(ax - 9, ay); g4.lineTo(ax + 9, ay);
+      g4.moveTo(ax, ay - 9); g4.lineTo(ax, ay + 9); g4.stroke();
+      g4.fillStyle = '#cfd3da'; g4.font = '14px "Microsoft YaHei",sans-serif';
+      g4.fillText(cc.label + '  (' + pe.pupil.x.toFixed(2) + ', ' + pe.pupil.y.toFixed(2) + ')',
+                  dx3 + pad3, ch3 + 20);
+      rows2.push(cc.label + ' pupil=(' + pe.pupil.x.toFixed(2) + ',' + pe.pupil.y.toFixed(2) + ')');
+    }
+    if (qs.get('bbox') === '1') document.getElementById('err').textContent = rows2.join(' | ');
+  }
+
+  window.__previewReady = true;
+})();
+</script>
+</body>
+</html>
