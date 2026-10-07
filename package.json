@@ -59,7 +59,7 @@
       ]
     },
     "nsis": {
-      "artifactName": "${productName}-Setup-${version}.${ext}",
+      "artifactName": "Naidan-Setup-${version}.${ext}",
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
@@ -70,7 +70,7 @@
       "deleteAppDataOnUninstall": false
     },
     "portable": {
-      "artifactName": "${productName}-Portable-${version}.${ext}"
+      "artifactName": "Naidan-Portable-${version}.${ext}"
     },
     "mac": {
       "icon": "build/icon.icns",
@@ -90,10 +90,11 @@
             "arm64"
           ]
         }
-      ]
+      ],
+      "artifactName": "Naidan-${version}-${arch}-${ext}"
     },
     "dmg": {
-      "artifactName": "${productName}-${version}-${arch}.${ext}"
+      "artifactName": "Naidan-${version}-${arch}.${ext}"
     }
   }
 }
