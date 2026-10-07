@@ -51,7 +51,7 @@ jobs:
           if-no-files-found: warn
 
   build-macos:
-    name: macOS (dmg + zip) — optional
+    name: macOS (dmg) — optional
     runs-on: macos-latest
     continue-on-error: true
     steps:
@@ -68,7 +68,7 @@ jobs:
       # macOS 的 .app 包名若是中文,APFS 会以 NFD 编码存储,
       # 7za 打包时找不到路径会直接失败 —— 所以这里把 productName 覆盖成 ASCII。
       - name: Build
-        run: npx electron-builder --mac --publish never -c.productName=Naidan
+        run: npx electron-builder --mac dmg --publish never -c.productName=Naidan
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
@@ -78,5 +78,4 @@ jobs:
         with:
           files: |
             dist/*.dmg
-            dist/*.zip
           draft: false
